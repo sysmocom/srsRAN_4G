@@ -736,6 +736,8 @@ bool s1ap::handle_initiatingmessage(const init_msg_s& msg)
       return handle_handover_request(msg.value.ho_request());
     case s1ap_elem_procs_o::init_msg_c::types_opts::mme_status_transfer:
       return handle_mme_status_transfer(msg.value.mme_status_transfer());
+    case s1ap_elem_procs_o::init_msg_c::types_opts::location_report_ctrl:
+      return handle_location_report_ctrl(msg.value.location_report_ctrl());
     default:
       logger.error("Unhandled initiating message: %s", msg.value.type().to_string());
   }
@@ -1367,6 +1369,19 @@ bool s1ap::handle_mme_status_transfer(const asn1::s1ap::mme_status_transfer_s& m
   return true;
 }
 
+bool s1ap::handle_location_report_ctrl(const asn1::s1ap::location_report_ctrl_s& msg)
+{
+  ue* u = handle_s1apmsg_ue_id(msg->enb_ue_s1ap_id.value.value, msg->mme_ue_s1ap_id.value.value);
+  if (u == nullptr) {
+    return false;
+  }
+
+    asn1::s1ap::cause_c cause;
+    cause.set_misc().value = cause_misc_opts::unspecified;
+    u->send_locationreportfailind(cause);
+    return true;
+}
+
 void s1ap::send_ho_notify(uint16_t rnti, uint64_t target_eci)
 {
   ue* user_ptr = users.find_ue_rnti(rnti);
@@ -1566,6 +1581,27 @@ bool s1ap::ue::send_uectxtreleaserequest(const cause_c& cause)
     overall_procedure_timeout.run();
   }
   return release_requested;
+}
+
+bool s1ap::ue::send_locationreportfailind(const cause_c& cause)
+{
+  if (not ctxt.mme_ue_s1ap_id.has_value()) {
+    logger.error("Cannot send Location Report Failure indication without a MME-UE-S1AP-Id allocated.");
+    s1ap_ptr->rrc->release_ue(ctxt.rnti);
+    s1ap_ptr->users.erase(this);
+    return false;
+  }
+
+  s1ap_pdu_c tx_pdu;
+  tx_pdu.set_init_msg().load_info_obj(ASN1_S1AP_ID_LOCATION_REPORT_FAIL_IND);
+  location_report_fail_ind_s& container = tx_pdu.init_msg().value.location_report_fail_ind();
+  container->mme_ue_s1ap_id.value         = ctxt.mme_ue_s1ap_id.value();
+  container->enb_ue_s1ap_id.value         = ctxt.enb_ue_s1ap_id;
+
+  // Cause
+  container->cause.value = cause;
+
+  return s1ap_ptr->sctp_send_s1ap_pdu(tx_pdu, ctxt.rnti, "LocationReportFailInd");
 }
 
 bool s1ap::ue::send_uectxtreleasecomplete()
