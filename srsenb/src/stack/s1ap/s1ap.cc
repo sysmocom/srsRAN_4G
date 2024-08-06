@@ -738,6 +738,8 @@ bool s1ap::handle_initiatingmessage(const init_msg_s& msg)
       return handle_mme_status_transfer(msg.value.mme_status_transfer());
     case s1ap_elem_procs_o::init_msg_c::types_opts::location_report_ctrl:
       return handle_location_report_ctrl(msg.value.location_report_ctrl());
+    case s1ap_elem_procs_o::init_msg_c::types_opts::trace_start:
+      return handle_trace_start(msg.value.trace_start());
     default:
       logger.error("Unhandled initiating message: %s", msg.value.type().to_string());
   }
@@ -830,7 +832,6 @@ bool s1ap::handle_initialctxtsetuprequest(const init_context_setup_request_s& ms
   WarnUnsupportFeature(msg->registered_lai_present, "RegisteredLAI");
   WarnUnsupportFeature(msg->srvcc_operation_possible_present, "SRVCCOperationPossible");
   WarnUnsupportFeature(msg->subscriber_profile_idfor_rfp_present, "SubscriberProfileIDforRFP");
-  WarnUnsupportFeature(msg->trace_activation_present, "TraceActivation");
   WarnUnsupportFeature(msg->ue_radio_cap_present, "UERadioCapability");
 
   ue* u = handle_s1apmsg_ue_id(msg->enb_ue_s1ap_id.value.value, msg->mme_ue_s1ap_id.value.value);
@@ -899,6 +900,14 @@ bool s1ap::handle_initialctxtsetuprequest(const init_context_setup_request_s& ms
       /* TODO: This should normally probably only be sent after the SecurityMode procedure has completed! */
       u->send_uectxtreleaserequest(cause);
     }
+  }
+
+  /* Reject trace activation */
+  if (msg->trace_activation_present) {
+      // Send RRC Release (cs-fallback-triggered) to MME
+      cause_c cause;
+      cause.set_misc().value = cause_misc_opts::unspecified;
+      u->send_tracefailind(cause, msg->trace_activation.value.e_utran_trace_id);
   }
 
   // E-RAB Setup Response is sent after the security cfg is complete
@@ -1382,6 +1391,19 @@ bool s1ap::handle_location_report_ctrl(const asn1::s1ap::location_report_ctrl_s&
     return true;
 }
 
+bool s1ap::handle_trace_start(const asn1::s1ap::trace_start_s& msg)
+{
+  ue* u = handle_s1apmsg_ue_id(msg->enb_ue_s1ap_id.value.value, msg->mme_ue_s1ap_id.value.value);
+  if (u == nullptr) {
+    return false;
+  }
+
+  asn1::s1ap::cause_c cause;
+  cause.set_misc().value = cause_misc_opts::unspecified;
+  u->send_tracefailind(cause, msg->trace_activation.value.e_utran_trace_id);
+  return true;
+}
+
 void s1ap::send_ho_notify(uint16_t rnti, uint64_t target_eci)
 {
   ue* user_ptr = users.find_ue_rnti(rnti);
@@ -1602,6 +1624,30 @@ bool s1ap::ue::send_locationreportfailind(const cause_c& cause)
   container->cause.value = cause;
 
   return s1ap_ptr->sctp_send_s1ap_pdu(tx_pdu, ctxt.rnti, "LocationReportFailInd");
+}
+
+bool s1ap::ue::send_tracefailind(const cause_c& cause, const asn1::fixed_octstring<8, true>& e_utran_trace_id)
+{
+  if (not ctxt.mme_ue_s1ap_id.has_value()) {
+    logger.error("Cannot send Trace Failure indication without a MME-UE-S1AP-Id allocated.");
+    s1ap_ptr->rrc->release_ue(ctxt.rnti);
+    s1ap_ptr->users.erase(this);
+    return false;
+  }
+
+  logger.warning("Rejecting S1AP Trace Activation");
+
+  s1ap_pdu_c tx_pdu;
+  tx_pdu.set_init_msg().load_info_obj(ASN1_S1AP_ID_TRACE_FAIL_IND);
+  trace_fail_ind_s& container = tx_pdu.init_msg().value.trace_fail_ind();
+  container->mme_ue_s1ap_id.value         = ctxt.mme_ue_s1ap_id.value();
+  container->enb_ue_s1ap_id.value         = ctxt.enb_ue_s1ap_id;
+  container->e_utran_trace_id.value       = e_utran_trace_id;
+
+  // Cause
+  container->cause.value = cause;
+
+  return s1ap_ptr->sctp_send_s1ap_pdu(tx_pdu, ctxt.rnti, "TraceFailInd");
 }
 
 bool s1ap::ue::send_uectxtreleasecomplete()

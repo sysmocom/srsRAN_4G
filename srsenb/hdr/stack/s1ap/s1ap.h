@@ -215,6 +215,8 @@ private:
 
   bool handle_location_report_ctrl(const asn1::s1ap::location_report_ctrl_s& msg);
 
+  bool handle_trace_start(const asn1::s1ap::trace_start_s& msg);
+
   // UE-specific data and procedures
   struct ue {
     //! TS 36.413, Section 8.4.1 - Handover Preparation Procedure
@@ -253,6 +255,7 @@ private:
     bool send_ulnastransport(srsran::unique_byte_buffer_t pdu);
     bool send_uectxtreleaserequest(const asn1::s1ap::cause_c& cause);
     bool send_locationreportfailind(const asn1::s1ap::cause_c& cause);
+    bool send_tracefailind(const asn1::s1ap::cause_c& cause, const asn1::fixed_octstring<8, true>& e_utran_trace_id);
     bool send_uectxtmodifyfailure(const asn1::s1ap::cause_c& cause);
     bool send_uectxtmodifyresp();
     bool send_uectxtreleasecomplete();
